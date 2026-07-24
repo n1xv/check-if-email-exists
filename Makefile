@@ -53,3 +53,15 @@ update-role-accounts:
 update-free-email-providers:
 # License is MIT.
 	curl https://raw.githubusercontent.com/ihmpavel/free-email-domains-list/refs/heads/master/data/data.txt -o core/src/misc/b2c.txt
+
+# Normalize a raw disposable-domain list into the curated denylist embedded in
+# the core crate (core/src/misc/disposable.txt). The raw list may contain any
+# case, blank lines and duplicates; this lowercases, strips whitespace, drops
+# blanks and dedupes. Comment lines (starting with `#`) are preserved on top.
+#
+# Usage: make normalize-disposable RAW=path/to/raw-list.txt
+.PHONY: normalize-disposable
+normalize-disposable:
+	@test -n "$(RAW)" || (echo "Usage: make normalize-disposable RAW=path/to/raw-list.txt" && exit 1)
+	{ grep -E '^#' core/src/misc/disposable.txt; tr '[:upper:]' '[:lower:]' < "$(RAW)" | tr -d '[:blank:]' | grep -E '.' | grep -vE '^#' | sort -u; } > core/src/misc/disposable.txt.tmp
+	mv core/src/misc/disposable.txt.tmp core/src/misc/disposable.txt

@@ -25,11 +25,16 @@ use thiserror::Error;
 
 const ROLE_ACCOUNTS: &str = include_str!("./roles.txt");
 const FREE_EMAIL_PROVIDERS: &str = include_str!("./b2c.txt");
+const DISPOSABLE_DOMAINS: &str = include_str!("./disposable.txt");
 
 // Lazy static initialization of domain sets
 static ROLE_ACCOUNTS_SET: Lazy<HashSet<String>> = Lazy::new(|| load_str_as_hashset(ROLE_ACCOUNTS));
 static FREE_EMAIL_PROVIDERS_SET: Lazy<HashSet<String>> =
 	Lazy::new(|| load_str_as_hashset(FREE_EMAIL_PROVIDERS));
+// Our own curated disposable-domain denylist, on top of the `mailchecker`
+// crate. See `./disposable.txt` for the format.
+static DISPOSABLE_DOMAINS_SET: Lazy<HashSet<String>> =
+	Lazy::new(|| load_domains_as_hashset(DISPOSABLE_DOMAINS));
 
 // Function to load a file with `\n`-separated lines into a HashSet.
 fn load_str_as_hashset(file_content: &str) -> HashSet<String> {
@@ -37,6 +42,21 @@ fn load_str_as_hashset(file_content: &str) -> HashSet<String> {
 		.lines()
 		.map(|line| line.trim().to_string())
 		.collect()
+}
+
+// Load a `\n`-separated list of domains into a HashSet, lowercasing each entry
+// and skipping blank lines and `#` comments.
+fn load_domains_as_hashset(file_content: &str) -> HashSet<String> {
+	file_content
+		.lines()
+		.map(|line| line.trim().to_lowercase())
+		.filter(|line| !line.is_empty() && !line.starts_with('#'))
+		.collect()
+}
+
+/// Whether the given domain is on our custom disposable-domain denylist.
+fn is_custom_disposable(domain: &str) -> bool {
+	DISPOSABLE_DOMAINS_SET.contains(&domain.to_lowercase())
 }
 
 /// Miscellaneous details about the email address.
@@ -89,8 +109,10 @@ pub async fn check_misc(
 	MiscDetails {
 		// mailchecker::is_valid checks also if the syntax is valid. But if
 		// we're here, it means we're sure the syntax is valid, so is_valid
-		// actually will only check if it's disposable.
-		is_disposable: !mailchecker::is_valid(address.as_ref()),
+		// actually will only check if it's disposable. On top of mailchecker,
+		// we also check our own curated disposable-domain denylist.
+		is_disposable: !mailchecker::is_valid(address.as_ref())
+			|| is_custom_disposable(&syntax.domain),
 		is_role_account: ROLE_ACCOUNTS_SET.contains(&syntax.username.to_lowercase()),
 		is_b2c: FREE_EMAIL_PROVIDERS_SET.contains(&syntax.domain.to_lowercase()),
 		gravatar_url,
@@ -120,5 +142,29 @@ mod tests {
 		assert!(!misc_details.is_disposable); // gmail.com is not in mailchecker
 		assert!(misc_details.is_role_account); // test is in roles.txt
 		assert!(misc_details.is_b2c); // gmail.com is in b2c.txt
+	}
+
+	#[tokio::test]
+	async fn test_custom_disposable_domain() {
+		// zeteex.cfd is not known to mailchecker, but is on our custom
+		// disposable.txt denylist, so it must be flagged as disposable.
+		let syntax = SyntaxDetails {
+			address: Some(EmailAddress::from_str("someone@zeteex.cfd").unwrap()),
+			is_valid_syntax: true,
+			username: "someone".to_string(),
+			domain: "zeteex.cfd".to_string(),
+			normalized_email: None,
+			suggestion: None,
+		};
+
+		let misc_details = check_misc(&syntax, false, None).await;
+
+		assert!(misc_details.is_disposable);
+	}
+
+	#[test]
+	fn test_is_custom_disposable_is_case_insensitive() {
+		assert!(is_custom_disposable("ZeTeEx.CFD"));
+		assert!(!is_custom_disposable("gmail.com"));
 	}
 }

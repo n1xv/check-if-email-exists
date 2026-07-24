@@ -2,6 +2,7 @@ target
 **/*.rs.bk
 .DS_Store
 private
+.history
 
 # docker-compose
 backend/postgres_data
