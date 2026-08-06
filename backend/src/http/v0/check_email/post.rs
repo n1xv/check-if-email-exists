@@ -26,6 +26,7 @@ use warp::{http, Filter};
 use super::backwardcompat::{BackwardCompatHotmailB2CVerifMethod, BackwardCompatYahooVerifMethod};
 use crate::config::BackendConfig;
 use crate::http::{check_header, ReacherResponseError};
+use crate::worker::do_work::{CheckEmailJobId, CheckEmailTask};
 
 /// The request body for the `POST /v0/check_email` endpoint.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -117,16 +118,39 @@ async fn http_handler(
 ) -> Result<impl warp::Reply, warp::Rejection> {
 	// The to_email field must be present
 	if body.to_email.is_empty() {
-		Err(
-			ReacherResponseError::new(http::StatusCode::BAD_REQUEST, "to_email field is required.")
-				.into(),
+		return Err(ReacherResponseError::new(
+			http::StatusCode::BAD_REQUEST,
+			"to_email field is required.",
 		)
-	} else {
-		// Run the future to check an email.
-		Ok(warp::reply::json(
-			&check_email(&body.to_check_email_input(Arc::clone(&config))).await,
-		))
+		.into());
 	}
+
+	// Run the verification.
+	let result = check_email(&body.to_check_email_input(Arc::clone(&config))).await;
+	let result_ok = Ok(result);
+
+	// Persist the result so it shows up in analytics (e.g.
+	// `GET /v1/analytics/blocked`). This is a no-op unless Postgres storage is
+	// configured. A storage failure must NOT break verification for existing
+	// `/v0` consumers, so we only log it.
+	let storage = config.get_storage_adapter();
+	if let Err(e) = storage
+		.store(
+			&CheckEmailTask {
+				input: body.to_check_email_input(Arc::clone(&config)),
+				job_id: CheckEmailJobId::SingleShot,
+				webhook: None,
+			},
+			&result_ok,
+			storage.get_extra(),
+		)
+		.await
+	{
+		tracing::warn!(target: LOG_TARGET, error=?e, email=body.to_email, "Failed to store result for analytics");
+	}
+
+	let result = result_ok.unwrap();
+	Ok(warp::reply::json(&result))
 }
 
 /// Create the `POST /check_email` endpoint.
