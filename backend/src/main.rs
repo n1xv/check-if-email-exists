@@ -17,6 +17,11 @@
 //! Main entry point of the `reacher_backend` binary. It has two `main`
 //! functions, depending on whether the `bulk` feature is enabled or not.
 
+// The binary crate does not inherit the library's `#![recursion_limit]`, and
+// building the warp filter chain (via `run_warp_server`) overflows the default
+// limit of 128 while evaluating Send/Sync bounds. Raise it here too.
+#![recursion_limit = "512"]
+
 use check_if_email_exists::{setup_sentry, LOG_TARGET};
 use reacher_backend::config::load_config;
 use reacher_backend::http::run_warp_server;

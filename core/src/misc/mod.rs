@@ -26,6 +26,7 @@ use thiserror::Error;
 const ROLE_ACCOUNTS: &str = include_str!("./roles.txt");
 const FREE_EMAIL_PROVIDERS: &str = include_str!("./b2c.txt");
 const DISPOSABLE_DOMAINS: &str = include_str!("./disposable.txt");
+const DISPOSABLE_ALLOWLIST: &str = include_str!("./disposable_allowlist.txt");
 
 // Lazy static initialization of domain sets
 static ROLE_ACCOUNTS_SET: Lazy<HashSet<String>> = Lazy::new(|| load_str_as_hashset(ROLE_ACCOUNTS));
@@ -35,6 +36,11 @@ static FREE_EMAIL_PROVIDERS_SET: Lazy<HashSet<String>> =
 // crate. See `./disposable.txt` for the format.
 static DISPOSABLE_DOMAINS_SET: Lazy<HashSet<String>> =
 	Lazy::new(|| load_domains_as_hashset(DISPOSABLE_DOMAINS));
+// Domains that must never be treated as disposable, even if `mailchecker` or
+// our denylist would flag them (e.g. mailinator.com used for testing). This
+// allowlist takes precedence over both. See `./disposable_allowlist.txt`.
+static DISPOSABLE_ALLOWLIST_SET: Lazy<HashSet<String>> =
+	Lazy::new(|| load_domains_as_hashset(DISPOSABLE_ALLOWLIST));
 
 // Function to load a file with `\n`-separated lines into a HashSet.
 fn load_str_as_hashset(file_content: &str) -> HashSet<String> {
@@ -57,6 +63,12 @@ fn load_domains_as_hashset(file_content: &str) -> HashSet<String> {
 /// Whether the given domain is on our custom disposable-domain denylist.
 fn is_custom_disposable(domain: &str) -> bool {
 	DISPOSABLE_DOMAINS_SET.contains(&domain.to_lowercase())
+}
+
+/// Whether the given domain is explicitly allowlisted, and must therefore never
+/// be treated as disposable (overrides both `mailchecker` and our denylist).
+fn is_disposable_allowlisted(domain: &str) -> bool {
+	DISPOSABLE_ALLOWLIST_SET.contains(&domain.to_lowercase())
 }
 
 /// Miscellaneous details about the email address.
@@ -111,8 +123,9 @@ pub async fn check_misc(
 		// we're here, it means we're sure the syntax is valid, so is_valid
 		// actually will only check if it's disposable. On top of mailchecker,
 		// we also check our own curated disposable-domain denylist.
-		is_disposable: !mailchecker::is_valid(address.as_ref())
-			|| is_custom_disposable(&syntax.domain),
+		is_disposable: !is_disposable_allowlisted(&syntax.domain)
+			&& (!mailchecker::is_valid(address.as_ref())
+				|| is_custom_disposable(&syntax.domain)),
 		is_role_account: ROLE_ACCOUNTS_SET.contains(&syntax.username.to_lowercase()),
 		is_b2c: FREE_EMAIL_PROVIDERS_SET.contains(&syntax.domain.to_lowercase()),
 		gravatar_url,
@@ -160,6 +173,24 @@ mod tests {
 		let misc_details = check_misc(&syntax, false, None).await;
 
 		assert!(misc_details.is_disposable);
+	}
+
+	#[tokio::test]
+	async fn test_allowlisted_domain_is_not_disposable() {
+		// mailinator.com IS known to mailchecker as disposable, but it's on our
+		// allowlist (used for testing), so it must NOT be flagged as disposable.
+		let syntax = SyntaxDetails {
+			address: Some(EmailAddress::from_str("someone@mailinator.com").unwrap()),
+			is_valid_syntax: true,
+			username: "someone".to_string(),
+			domain: "mailinator.com".to_string(),
+			normalized_email: None,
+			suggestion: None,
+		};
+
+		let misc_details = check_misc(&syntax, false, None).await;
+
+		assert!(!misc_details.is_disposable);
 	}
 
 	#[test]

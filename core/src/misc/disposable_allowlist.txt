@@ -1,0 +1,12 @@
+# Disposable-domain ALLOWLIST.
+#
+# Domains listed here are NEVER reported as disposable, even if the mailchecker
+# crate or our own disposable.txt would flag them. This takes precedence over
+# both. Use it for disposable providers you rely on (e.g. for testing).
+#
+# Format: one domain per line, lowercase. Blank lines and `#` comments ignored.
+#
+# --- domains below ---
+mailinator.com
+mailinator.net
+mailinator2.com
