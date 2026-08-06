@@ -1,175 +1,217 @@
-[![Crate](https://img.shields.io/crates/v/check-if-email-exists.svg)](https://crates.io/crates/check-if-email-exists)
-[![Docs](https://docs.rs/check-if-email-exists/badge.svg)](https://docs.rs/check-if-email-exists)
-[![Docker](https://img.shields.io/docker/v/reacherhq/backend?color=0db7ed&label=docker&sort=date)](https://hub.docker.com/r/reacherhq/backend)
-[![Actions Status](https://github.com/reacherhq/check-if-email-exists/workflows/pr/badge.svg)](https://github.com/reacherhq/check-if-email-exists/actions)
+# Email Verification Service
 
-<br /><br />
+Self-hosted HTTP API to **validate email addresses** — reject temporary
+(disposable) and invalid addresses at signup/input, and see **how many
+addresses were blocked** over any period.
 
-<p align="center"><img align="center" src="https://storage.googleapis.com/saasify-uploads-prod/696e287ad79f0e0352bc201b36d701849f7d55e7.svg" height="96" alt="reacher" /></p>
-<h1 align="center">check-if-email-exists</h1>
-<h4 align="center">Check if an email address exists without sending any email.<br/>Comes with a <a href="./backend">⚙️ HTTP backend</a>.</h4>
+Forked from [Reacher / `check-if-email-exists`](https://github.com/reacherhq/check-if-email-exists)
+with three additions on top of upstream:
 
-<br /><br /><br />
+- **Custom disposable-domain denylist** (`core/src/misc/disposable.txt`) merged into `misc.is_disposable`, on top of the built-in `mailchecker` list.
+- **Allowlist** (`core/src/misc/disposable_allowlist.txt`) — domains that must never be treated as disposable (e.g. `mailinator.com` for testing), overriding both sources.
+- **Analytics endpoint** `GET /v1/analytics/blocked` — count + list of blocked addresses over a time period.
 
-## 👉 Live Demo: https://reacher.email
+This document is about **integrating with the running service**. For running/deploying
+the backend itself, see [`backend/README.md`](./backend/README.md).
 
-<img src="https://storage.googleapis.com/saasify-uploads-prod/696e287ad79f0e0352bc201b36d701849f7d55e7.svg" height="68" align="left" />
+---
 
-This is open-source, but I also offer a **SaaS** solution that has `check-if-email-exists` packaged in a nice friendly web interface. If you are interested, find out more at [No2Bounce.com](https://no2bounce.com/?ref=github). If you have any questions, you can contact me at amaury@reacher.email.
+## 🔑 Credentials & base URL
 
-<br />
+**This repository is public — no URLs, secrets or passwords are committed here.**
+Get them from **Railway**:
 
-## Get Started
+| Value | Where in Railway |
+| --- | --- |
+| **Base URL** | The Reacher service → **Settings → Networking** → the generated domain (`https://<name>.up.railway.app`). |
+| **Auth secret** | The Reacher service → **Variables** → `RCH__HEADER_SECRET`. |
+| **Postgres URL** (analytics only) | The Postgres service → **Variables** → `DATABASE_URL`. |
 
-3 non-SaaS ways to get started with `check-if-email-exists`.
+Every request must send the secret in the **`x-reacher-secret`** header.
 
-### 1. ⚙️ HTTP backend using Docker (popular method 🥇) [[Full docs](./backend/README.md)]
-
-This option allows you to run a HTTP backend using Docker 🐳, on a cloud instance or your own server. Please note that outbound port 25 must be open.
-
-```bash
-docker run -p 8080:8080 reacherhq/backend:latest
-```
-
-Then send a `POST http://localhost:8080/v0/check_email` request with the following body:
-
-```js
-{
-    "to_email": "someone@gmail.com",
-    "proxy": {                        // (optional) SOCK5 proxy to run the verification through, default is empty
-        "host": "my-proxy.io",
-        "port": 1080,
-        "username": "me",             // (optional) Proxy username
-        "password": "pass"            // (optional) Proxy password
-    }
-}
-```
-**Note regarding proxy servers**
-It is possible to operate Reacher with your own IP addresses. But if you wish to process more than very small volumes you will need SMTP proxy servers. For SMTP proxy servers please use [proxy25.com](https://proxy25.com/?ref=github)
-
-### 2. Download the CLI [[Full docs](./cli/README.md)]
-
-> Note: The CLI binary doesn't connect to any backend, it checks the email directly from your computer.
-
-Head to the [releases page](https://github.com/reacherhq/check-if-email-exists/releases) and download the binary for your platform.
+In your app, store them as environment variables (never hard-code, never expose to the browser):
 
 ```bash
-> $ check_if_email_exists --help
-check_if_email_exists 0.9.1
-Check if an email address exists without sending an email.
-
-USAGE:
-    check_if_email_exists [FLAGS] [OPTIONS] [TO_EMAIL]
+REACHER_URL=...      # the Railway domain
+REACHER_SECRET=...   # value of RCH__HEADER_SECRET
 ```
 
-Check out the [dedicated README.md](./cli/README.md) for all options and flags.
+---
 
-### 3. Programmatic Usage [[Full docs](https://docs.rs/check-if-email-exists)]
+## 📡 Endpoints
 
-In your own Rust project, you can add `check-if-email-exists` in your `Cargo.toml`:
+### `POST /v1/check_email` — verify one address
 
-```toml
-[dependencies]
-check-if-email-exists = "0.9"
+Request:
+
+```http
+POST /v1/check_email
+x-reacher-secret: <REACHER_SECRET>
+Content-Type: application/json
+
+{ "to_email": "someone@gmail.com" }
 ```
 
-And use it in your code as follows:
-
-```rust
-use check_if_email_exists::{check_email, CheckEmailInput, CheckEmailInputProxy};
-
-async fn check() {
-    // Let's say we want to test the deliverability of someone@gmail.com.
-    let mut input = CheckEmailInput::new(vec!["someone@gmail.com".into()]);
-
-    // Verify this email, using async/await syntax.
-    let result = check_email(&input).await;
-
-    // `result` is a `Vec<CheckEmailOutput>`, where the CheckEmailOutput
-    // struct contains all information about our email.
-    println!("{:?}", result);
-}
-```
-
-The reference docs are hosted on [docs.rs](https://docs.rs/check-if-email-exists).
-
-## ✈️ JSON Output
-
-The output will be a JSON with the below format, the fields should be self-explanatory. For `someone@gmail.com` (note that it is disabled by Gmail), here's the exact output:
+Relevant response fields:
 
 ```json
 {
-	"input": "someone@gmail.com",
-	"is_reachable": "invalid",
-	"misc": {
-		"is_disposable": false,
-		"is_role_account": false,
-		"is_b2c": true
-	},
-	"mx": {
-		"accepts_mail": true,
-		"records": [
-			"alt3.gmail-smtp-in.l.google.com.",
-			"gmail-smtp-in.l.google.com.",
-			"alt1.gmail-smtp-in.l.google.com.",
-			"alt4.gmail-smtp-in.l.google.com.",
-			"alt2.gmail-smtp-in.l.google.com."
-		]
-	},
-	"smtp": {
-		"can_connect_smtp": true,
-		"has_full_inbox": false,
-		"is_catch_all": false,
-		"is_deliverable": false,
-		"is_disabled": true
-	},
-	"syntax": {
-		"domain": "gmail.com",
-		"is_valid_syntax": true,
-		"username": "someone",
-		"suggestion": null
-	}
+  "input": "someone@gmail.com",
+  "is_reachable": "safe",              // safe | risky | invalid | unknown
+  "misc":   { "is_disposable": false, "is_role_account": false },
+  "mx":     { "accepts_mail": true },
+  "smtp":   { "is_deliverable": true, "can_connect_smtp": true, "is_catch_all": false },
+  "syntax": { "is_valid_syntax": true, "domain": "gmail.com" }
 }
 ```
 
-## What Does This Tool Check?
+### `GET /v1/analytics/blocked` — blocked-address analytics
 
-| Included? | Feature                                       | Description                                                                                                                     | JSON field                                                                |
-| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| ✅        | **Email reachability**                        | How confident are we in sending an email to this address? Can be one of `safe`, `risky`, `invalid` or `unknown`.                | `is_reachable`                                                            |
-| ✅        | **Syntax validation**                         | Is the address syntactically valid?                                                                                             | `syntax.is_valid_syntax`                                                  |
-| ✅        | **DNS records validation**                    | Does the domain of the email address have valid MX DNS records?                                                                 | `mx.accepts_mail`                                                         |
-| ✅        | **Disposable email address (DEA) validation** | Is the address provided by a known [disposable email address](https://en.wikipedia.org/wiki/Disposable_email_address) provider? | `misc.is_disposable`                                                      |
-| ✅        | **SMTP server validation**                    | Can the mail exchanger of the email address domain be contacted successfully?                                                   | `smtp.can_connect_smtp`                                                   |
-| ✅        | **Email deliverability**                      | Is an email sent to this address deliverable?                                                                                   | `smtp.is_deliverable`                                                     |
-| ✅        | **Mailbox disabled**                          | Has this email address been disabled by the email provider?                                                                     | `smtp.is_disabled`                                                        |
-| ✅        | **Full inbox**                                | Is the inbox of this mailbox full?                                                                                              | `smtp.has_full_inbox`                                                     |
-| ✅        | **Catch-all address**                         | Is this email address a [catch-all](https://debounce.io/blog/help/what-is-a-catch-all-or-accept-all/) address?                  | `smtp.is_catch_all`                                                       |
-| ✅        | **Role account validation**                   | Is the email address a well-known role account?                                                                                 | `misc.is_role_account`                                                    |
-| ✅        | **Gravatar Url**                              | The url of the [Gravatar](https://gravatar.com/) email address profile picture                                                  | `misc.gravatar_url`                                                       |
-| ✅        | **Have I Been Pwned?**                        | Has this email been compromised in a [data breach](https://haveibeenpwned.com/)?                                                | `misc.haveibeenpwned`                                                     |
-| 🔜        | **Free email provider check**                 | Is the email address bound to a known free email provider?                                                                      | [Issue #89](https://github.com/reacherhq/check-if-email-exists/issues/89) |
-| 🔜        | **Syntax validation, provider-specific**      | According to the syntactic rules of the target mail provider, is the address syntactically valid?                               | [Issue #90](https://github.com/reacherhq/check-if-email-exists/issues/90) |
-| 🔜        | **Honeypot detection**                        | Does email address under test hide a [honeypot](https://en.wikipedia.org/wiki/Spamtrap)?                                        | [Issue #91](https://github.com/reacherhq/check-if-email-exists/issues/91) |
+Returns the count and list of addresses that would be rejected (disposable / invalid
+syntax / non-existent mailbox) in a time window. **Requires Postgres storage** (see below).
 
-## 🤔 Why?
+Query params (all optional):
 
-Many online services (https://hunter.io, https://verify-email.org, https://email-checker.net) offer this service for a paid fee. Here is an open-source alternative to those tools.
+| Param | Meaning | Default |
+| --- | --- | --- |
+| `from` | RFC3339, inclusive lower bound | epoch |
+| `to` | RFC3339, exclusive upper bound | now |
+| `reason` | `all` \| `disposable` \| `invalid` \| `syntax` | `all` |
+| `limit` | max rows (1–10000) | 100 |
+| `offset` | pagination offset | 0 |
 
-## License
+Response:
 
-`check-if-email-exists`'s source code is provided under a **dual license model**.
+```json
+{
+  "count": 1234,
+  "from": "2026-08-01T00:00:00Z",
+  "to": "2026-09-01T00:00:00Z",
+  "reason": "all",
+  "limit": 100,
+  "offset": 0,
+  "results": [
+    { "email": "foo@zeteex.cfd", "reason": "disposable",
+      "is_reachable": "risky", "is_disposable": true,
+      "is_valid_syntax": true, "created_at": "2026-08-06 13:54:24+00" }
+  ]
+}
+```
 
-### Commercial license
+---
 
-If you want to use `check-if-email-exists` to develop commercial sites, tools, and applications, the Commercial License is the appropriate license. With this option, your source code is kept proprietary. Purchase a `check-if-email-exists` Commercial License at https://reacher.email/pricing.
+## 🧩 How to integrate
 
-### Open source license
+**Golden rule: call this service only from your backend.** The secret must never
+reach the browser or a client bundle. Flow: `frontend → your backend → this service`.
 
-If you are creating an open-source application under a license compatible with the GNU Affero GPL License v3, you may use `check-if-email-exists` under the terms of the [AGPL-3.0](./LICENSE.AGPL).
+### Decision logic (what to reject)
 
-[➡️ Read more](https://docs.reacher.email/self-hosting/licensing) about Reacher's license.
+| Condition (from `check_email`) | Action | Suggested message |
+| --- | --- | --- |
+| `syntax.is_valid_syntax == false` | **reject** | "Please enter a valid email" |
+| `misc.is_disposable == true` | **reject** | "We don't support temporary (disposable) email addresses" |
+| `is_reachable == "invalid"` | **reject** | "This email address doesn't seem to exist" |
+| `is_reachable` is `safe` or `risky` | **accept** | — |
+| `is_reachable == "unknown"` | **accept** (fail-open) | — |
+| timeout / service error | **accept** (fail-open) | log for monitoring |
 
-## 🔨 Build From Source
+Why fail-open on `unknown`/errors: some providers (Outlook/Hotmail/Yahoo) can't be
+verified from a cloud IP and legitimately return `unknown` — blocking them would lock
+out real users. Likewise, the checker being down must not break signups.
 
-Build the [CLI from source](./cli/README.md#build-from-source) or the [HTTP backend from source](./backend/README.md#build-from-source).
+### Quickstart (curl)
+
+```bash
+# verify an address
+curl -X POST "$REACHER_URL/v1/check_email" \
+  -H "x-reacher-secret: $REACHER_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"to_email":"someone@gmail.com"}'
+
+# how many blocked this month + the list
+curl "$REACHER_URL/v1/analytics/blocked?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z&limit=1000" \
+  -H "x-reacher-secret: $REACHER_SECRET"
+
+# only temporary/disposable addresses
+curl "$REACHER_URL/v1/analytics/blocked?reason=disposable&limit=1000" \
+  -H "x-reacher-secret: $REACHER_SECRET"
+```
+
+---
+
+## 🤖 AI integration prompt
+
+Paste the block below into your coding assistant (Cursor / Claude Code / Copilot),
+fill in `{{STACK}}`, and provide `REACHER_URL` / `REACHER_SECRET` via env (get their
+values from Railway — see above).
+
+````text
+You are integrating email validation into {{STACK}}.
+Goal: at signup/input, reject temporary (disposable) and invalid email addresses,
+showing a message like "We don't support this address".
+
+=== SERVICE (self-hosted, forked Reacher) ===
+- Base URL:  from env REACHER_URL
+- Auth:      HTTP header  x-reacher-secret: <env REACHER_SECRET>
+- Verify:    POST {REACHER_URL}/v1/check_email   body {"to_email":"<email>"}
+  Response fields: is_reachable ("safe"|"risky"|"invalid"|"unknown"),
+                   misc.is_disposable (bool), syntax.is_valid_syntax (bool)
+- Analytics: GET  {REACHER_URL}/v1/analytics/blocked?from=&to=&reason=&limit=&offset=
+  (blocked count + list; reason ∈ all|disposable|invalid|syntax)
+
+=== HARD REQUIREMENTS ===
+1. Call the service ONLY from the backend. The secret must never reach the browser,
+   client bundle, or logs. Flow: frontend -> our backend /api/validate-email -> service.
+   Return only { valid: boolean, reason?: string, message?: string } to the client.
+2. Trigger on the frontend: validate on blur of the email field and again on submit.
+   Debounce; do NOT call on every keystroke.
+3. Normalize the email (trim + lowercase) before sending.
+4. Call the service with a 5s timeout.
+5. DECISION LOGIC (in order):
+   a) syntax.is_valid_syntax == false        -> reject "Please enter a valid email"
+   b) misc.is_disposable == true             -> reject "We don't support temporary email addresses"
+   c) is_reachable == "invalid"              -> reject "This email address doesn't seem to exist"
+   d) is_reachable == "safe" | "risky"       -> accept
+   e) is_reachable == "unknown"              -> accept (fail-open): some providers can't be
+                                                verified from a cloud IP; do NOT block them.
+   f) timeout OR any service error           -> accept (fail-open) + log for monitoring.
+      The checker being down must NOT block signups.
+
+=== DELIVER ===
+- Backend endpoint POST /api/validate-email  { email } -> { valid, reason?, message? }
+- Reusable validateEmail(email) helper implementing the logic above
+- Frontend wiring: inline error under the field, block submit when valid=false
+- Config via env only: REACHER_URL, REACHER_SECRET (from a secret store, not committed)
+
+Implement it in {{STACK}} following the project's conventions. Localize the messages.
+````
+
+---
+
+## ⚙️ Operational notes
+
+- **Analytics needs Postgres.** Set `RCH__STORAGE__POSTGRES__DB_URL` on the service
+  (Railway → Postgres → `DATABASE_URL`). Reacher then records every verification into
+  `v1_task_result`, and `/v1/analytics/blocked` reads from it.
+- **No backfill.** Analytics only counts verifications made *after* Postgres was enabled.
+- **Outbound port 25 & proxies.** SMTP verification needs outbound port 25. If it's
+  blocked (or the egress IP has poor reputation), results come back as `unknown`. For
+  reliable, high-volume verification, route SMTP through a SOCKS5 proxy
+  (`RCH__PROXY__*`, e.g. [proxy25.com](https://proxy25.com)).
+- **Disposable list.** `core/src/misc/disposable.txt` is embedded at compile time — after
+  editing it (or the allowlist), rebuild and redeploy. Regenerate from a raw list with
+  `make normalize-disposable RAW=path/to/list.txt`.
+
+---
+
+## 📄 License
+
+Based on [`check-if-email-exists`](https://github.com/reacherhq/check-if-email-exists)
+by Reacher, available under the [AGPL-3.0](./LICENSE.AGPL). This fork inherits the same
+license. See [Reacher's licensing docs](https://docs.reacher.email/self-hosting/licensing)
+for the upstream dual-license details.
+
+## 🔨 Build from source
+
+See [`backend/README.md`](./backend/README.md#build-from-source).
