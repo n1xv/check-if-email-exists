@@ -123,8 +123,33 @@ fn calculate_reachable(misc: &MiscDetails, smtp: &Result<SmtpDetails, SmtpError>
 			return Reachable::Risky;
 		}
 
-		if !smtp.is_deliverable || !smtp.can_connect_smtp || smtp.is_disabled {
+		// A mailbox the provider explicitly reports as disabled is a reliable
+		// "invalid" signal, regardless of our IP reputation.
+		if smtp.is_disabled {
 			return Reachable::Invalid;
+		}
+
+		// If we couldn't actually complete the SMTP conversation, we don't know.
+		if !smtp.can_connect_smtp {
+			return Reachable::Unknown;
+		}
+
+		if !smtp.is_deliverable {
+			// The mailbox was rejected (RCPT TO refused). This is only
+			// conclusive when verifying from a trusted source (clean IP + valid
+			// reverse DNS): many servers reject RCPT from low-reputation IPs,
+			// producing FALSE "invalid" results (e.g. even `postmaster@` gets
+			// rejected). So unless strict mode is explicitly enabled — set
+			// `RCH__STRICT_INVALID=true` once a clean SOCKS5 proxy is in place —
+			// we do NOT mark it invalid, and return Unknown so callers pass it.
+			let strict = std::env::var("RCH__STRICT_INVALID")
+				.map(|v| v == "true" || v == "1")
+				.unwrap_or(false);
+			return if strict {
+				Reachable::Invalid
+			} else {
+				Reachable::Unknown
+			};
 		}
 
 		Reachable::Safe
