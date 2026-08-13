@@ -10,3 +10,6 @@
 mailinator.com
 mailinator.net
 mailinator2.com
+# freemail.hu is a legitimate Hungarian free email provider (real mailboxes),
+# but mailchecker lists it as disposable. Allowlist it so real users pass.
+freemail.hu

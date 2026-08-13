@@ -58,21 +58,14 @@ impl Default for SyntaxDetails {
 /// From an `email_address` string, compute syntax information about it, such as
 /// username and domain.
 pub fn check_syntax(email_address: &str) -> SyntaxDetails {
+	// Syntax must only validate the *format* of the address. Whether the domain
+	// is disposable is a separate concern handled in `check_misc`
+	// (`misc.is_disposable`). Previously this also ran `mailchecker::is_valid`,
+	// which conflated disposable domains with invalid syntax: legitimate
+	// providers that mailchecker lists (e.g. freemail.hu) were reported as
+	// `is_valid_syntax: false` and short-circuited before MX/SMTP/misc checks.
 	let email_address = match EmailAddress::from_str(email_address) {
-		Ok(m) => {
-			if mailchecker::is_valid(email_address) {
-				m
-			} else {
-				return SyntaxDetails {
-					address: None,
-					domain: "".into(),
-					is_valid_syntax: false,
-					username: "".into(),
-					normalized_email: None,
-					suggestion: None,
-				};
-			}
-		}
+		Ok(m) => m,
 		_ => {
 			return SyntaxDetails {
 				address: None,
@@ -95,6 +88,21 @@ pub fn check_syntax(email_address: &str) -> SyntaxDetails {
 		.next()
 		.expect("We checked above that email is valid. qed.")
 		.into();
+
+	// A real email domain has a TLD, i.e. contains a dot. This keeps addresses
+	// like "foo@bar" syntactically invalid, without conflating disposable
+	// domains with bad syntax (that is handled in `check_misc`).
+	if !domain.contains('.') {
+		return SyntaxDetails {
+			address: None,
+			domain: "".into(),
+			is_valid_syntax: false,
+			username: "".into(),
+			normalized_email: None,
+			suggestion: None,
+		};
+	}
+
 	let normalized_email = normalize_email(&username, &domain);
 
 	SyntaxDetails {
